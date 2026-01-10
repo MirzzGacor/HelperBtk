@@ -1,4 +1,4 @@
--- ccd1.lua (Bothax-compatible rewrite)
+-- test.lua (Bothax-compatible rewrite)
 -- Adapted from original VanzCya script, preserves original features
 
 -- =========================
@@ -11,7 +11,7 @@ local function find_fn(names)
     return nil
 end
 
--- sleep fallback (some executors use sleep(ms) or Sleep)
+-- sleep fallback (some executors use Sleep or other names)
 if type(sleep) ~= "function" then
     sleep = find_fn({"Sleep", "sleep_ms", "sleep_ms"}) or function(ms) end
 end
@@ -31,7 +31,6 @@ if type(SendPacketRaw) ~= "function" then
     if alt then
         SendPacketRaw = alt
     else
-        -- wrap SendPacket if available
         if type(SendPacket) == "function" then
             SendPacketRaw = function(flag_or_type, pkt)
                 if type(flag_or_type) == "boolean" then
@@ -51,7 +50,7 @@ if type(SendPacketRaw) ~= "function" then
 end
 
 -- Getters aliases
-GetLocal = GetLocal or find_fn({"GetLocal", "getLocal", "GetPlayerInfo", "GetPlayer"})
+GetLocal = GetLocal or find_fn({"GetLocal", "getLocal", "GetPlayerInfo", "GetPlayer"}) or function() return nil end
 GetObjectList = GetObjectList or find_fn({"GetObjectList", "GetWorldObject", "getWorldObject", "getObjectList"}) or function() return {} end
 GetInventory = GetInventory or find_fn({"GetInventory", "getInventory", "getinventory"}) or function() return {} end
 GetTiles = GetTiles or find_fn({"GetTiles", "getTiles"}) or function() return {} end
@@ -302,7 +301,6 @@ AddHook("OnSendPacket", "packet", function(packet)
         end
     end
 
-    -- drop commands
     local txt = pkt:match("action|input\n|text|/d (%d+)") or pkt:match("/d (%d+)")
     if txt then DropItem(1796, txt); tol("Succes Drop `0"..txt.." `2Diamond Lock"); return true end
 
