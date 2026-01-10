@@ -919,7 +919,7 @@ local function menubar()
     local dialog = [[
 add_label_with_icon|big|`cAsh `bProxy|left|2480|
 add_textbox|		
-add_textbox|`9GrowID `0: ]] .. GetLocal().name ..[[|
+add_textbox|`9GrowID `0: ]] .. (GetLocal() and GetLocal().name or "") ..[[|
 add_textbox|`9Date `0: `2]] .. os.date("!%a, %b/%d/%Y") .. [[|
 add_textbox|`9Time `0: `2]] .. os.date("%I:%M %p") .. [[|
 add_spacer|small|				
@@ -1193,7 +1193,12 @@ local function text_handler(type_or_packet, packet)
     end
 
     if pkt:find("/help") or pkt:find("/fitur") then
-        menubar()
+        if type(menubar) == "function" then
+            menubar()
+        else
+            LOG("menubar not defined yet, showing fallback menu")
+            CreateDialog([[add_label_with_icon|big|`cAsh `bProxy|left|2480|\nadd_button|menuu|`bCommand/Menu Bar||\nend_dialog|cmdend|Cancel|]])
+        end
         return true
     end
 
@@ -1326,9 +1331,5 @@ ovlay("Script Has Ben Run")
 SleepS(2)
 ovlay("Type /help or /fitur to show feature")
 SendPacket(2,"action|input\n|text|Script Proxy Bothax By VanzCya")
-
--- =========================
--- If original script had a main loop, ensure it uses SleepS and is placed here.
--- =========================
 
 -- End of file
