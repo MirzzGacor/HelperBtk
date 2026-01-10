@@ -1,9 +1,8 @@
--- test_bothax.lua
--- Rewritten for Bothax compatibility (preserve original features)
--- Author: adapted from original VanzCya script
+-- ccd1.lua (Bothax-compatible rewrite)
+-- Adapted from original VanzCya script, preserves original features
 
 -- =========================
--- Compatibility shim (Bothax aliases & safe fallbacks)
+-- Compatibility shim
 -- =========================
 local function find_fn(names)
     for _, n in ipairs(names) do
@@ -12,45 +11,47 @@ local function find_fn(names)
     return nil
 end
 
--- Variant/dialog sender
+-- sleep fallback (some executors use sleep(ms) or Sleep)
+if type(sleep) ~= "function" then
+    sleep = find_fn({"Sleep", "sleep_ms", "sleep_ms"}) or function(ms) end
+end
+local function SleepS(sec) sleep(sec * 1000) end
+
+-- SendVariant / SendPacket / SendPacketRaw aliases
 if type(SendVariant) ~= "function" then
     SendVariant = find_fn({"SendVariant", "sendVariant", "SendVariantList", "sendvariant"})
 end
 
--- Raw packet sender (wrap common variants)
+if type(SendPacket) ~= "function" then
+    SendPacket = find_fn({"SendPacket", "sendPacket", "sendpacket"}) or function() end
+end
+
 if type(SendPacketRaw) ~= "function" then
     local alt = find_fn({"SendPacketRaw", "sendPacketRaw", "sendpacketraw"})
     if alt then
         SendPacketRaw = alt
     else
-        local sp = find_fn({"SendPacket", "sendPacket", "sendpacket"})
-        if sp then
+        -- wrap SendPacket if available
+        if type(SendPacket) == "function" then
             SendPacketRaw = function(flag_or_type, pkt)
-                -- If executor expects (bool, pkt) or (type, pkt), try to adapt.
                 if type(flag_or_type) == "boolean" then
-                    -- try to call sp with type if pkt.type exists
                     if type(pkt) == "table" and pkt.type then
-                        sp(pkt.type, tostring(pkt.value or ""))
+                        SendPacket(pkt.type, tostring(pkt.value or ""))
                     else
-                        sp(0, tostring(pkt or ""))
+                        SendPacket(0, tostring(pkt or ""))
                     end
                 else
-                    -- assume first arg is type
-                    sp(flag_or_type, tostring(pkt and (pkt.value or pkt.netid or "") or ""))
+                    SendPacket(flag_or_type, tostring(pkt and (pkt.value or pkt.netid or "") or ""))
                 end
             end
         else
-            -- final fallback: no-op
             SendPacketRaw = function() end
         end
     end
 end
 
--- Ensure SendPacket exists
-SendPacket = SendPacket or find_fn({"SendPacket", "sendPacket", "sendpacket"}) or function() end
-
--- Getters
-GetLocal = GetLocal or find_fn({"GetLocal", "getLocal", "GetPlayerInfo", "GetPlayer"}) or function() return nil end
+-- Getters aliases
+GetLocal = GetLocal or find_fn({"GetLocal", "getLocal", "GetPlayerInfo", "GetPlayer"})
 GetObjectList = GetObjectList or find_fn({"GetObjectList", "GetWorldObject", "getWorldObject", "getObjectList"}) or function() return {} end
 GetInventory = GetInventory or find_fn({"GetInventory", "getInventory", "getinventory"}) or function() return {} end
 GetTiles = GetTiles or find_fn({"GetTiles", "getTiles"}) or function() return {} end
@@ -68,11 +69,14 @@ local function Overlay(msg)
     end
 end
 
--- Safe sleep
-local function SleepS(sec) sleep(sec * 1000) end
+-- ImGui safe stubs
+ImGui = ImGui or {}
+ImGui.Begin = ImGui.Begin or function() end
+ImGui.End = ImGui.End or function() end
+ImGui.Text = ImGui.Text or function() end
 
 -- =========================
--- State (preserve original variable names & defaults)
+-- State (preserve original)
 -- =========================
 Tax = Tax or 5
 
@@ -102,14 +106,13 @@ AutoBtk = false
 resetchand1 = false
 resetchand2 = false
 relog = false
+bgl, dl, wl, drop = 0, 0, 0, 0
 
 -- =========================
--- UI / Dialog strings (kept original style)
+-- UI / Dialog strings
 -- =========================
 local function lmo(setx, sety)
-    if not setx and not sety then
-        return "`4Did You Done Set This?``"
-    end
+    if not setx and not sety then return "`4Did You Done Set This?``" end
     return tostring(setx) .. "," .. tostring(sety)
 end
 
@@ -183,7 +186,7 @@ add_textbox|Tap Ae Gems Store Nanti Show menu|
 ]]
 
 -- =========================
--- Core helpers (Drop, wear, check)
+-- Core helpers
 -- =========================
 local function DropItem(id, count)
     SendPacket(2, "action|dialog_return\ndialog_name|drop\nitem_drop|"..tostring(id).."|\nitem_count|"..tostring(count).."\n")
@@ -215,7 +218,6 @@ local function colect()
     for _, obj in pairs(objects) do
         for _, t in pairs(tiles) do
             if obj.pos and obj.pos.x and obj.pos.y and (math.floor(obj.pos.x/32) == t[1]) and (math.floor(obj.pos.y/32) == t[2]) then
-                -- send collect packet; original used SendPacketRaw(false, {type=11,...})
                 SendPacketRaw(false, { type = 11, value = obj.oid or obj.netid, x = obj.pos.x, y = obj.pos.y })
                 table.insert(data, { id = obj.id, count = obj.amount or 1 })
             end
@@ -233,8 +235,7 @@ local function checkitm(id)
 end
 
 local function wear(id)
-    local pkt = { type = 10, value = id }
-    SendPacketRaw(false, pkt)
+    SendPacketRaw(false, { type = 10, value = id })
 end
 
 local function ovlay(str)
@@ -245,229 +246,157 @@ local function ovlay(str)
     end
 end
 
-local function tol(txt)
-    Log(txt)
-end
+local function tol(txt) Log(txt) end
 
 -- =========================
--- Hook: OnSendPacket (text commands, dialog buttons)
+-- OnSendPacket handler (commands & dialog buttons)
 -- =========================
 AddHook("OnSendPacket", "packet", function(packet)
     if not packet then return false end
-    local pktstr = tostring(packet)
+    local pkt = tostring(packet)
 
-    -- /test <text> -> send talk bubble
-    if pktstr:find("/test (.+)") then
-        local yes = pktstr:match("/test (.+)")
-        if yes then
-            local var = {}
-            var[0] = "OnTalkBubble"
-            var[1] = GetLocal().netid
-            var[2] = tostring(yes)
-            if type(SendVariant) == "function" then SendVariant(var) end
-            return true
+    if pkt:find("/test (.+)") then
+        local yes = pkt:match("/test (.+)")
+        if yes and type(SendVariant) == "function" then
+            SendVariant({ [0] = "OnTalkBubble", [1] = GetLocal().netid, [2] = tostring(yes) })
         end
+        return true
     end
 
-    -- blockSDB toggle
-    if pktstr:find("buttonClicked|blockSDB") then
+    if pkt:find("buttonClicked|blockSDB") then
         blocksdb = not blocksdb
         ovlay(blocksdb and "`2Block Sdb Mode Enabled" or "`4Block Sdb Mode Disabled")
         return true
     end
 
-    -- open wrench dialog
-    if pktstr:find("action|dialog_return\ndialog_name|kk\nbuttonClicked|Wrench") then
-        if type(SendVariant) == "function" then
-            SendVariant({ [0] = "OnDialogRequest", [1] = wrenchop })
-        end
+    if pkt:find("action|dialog_return\ndialog_name|kk\nbuttonClicked|Wrench") then
+        if type(SendVariant) == "function" then SendVariant({ [0] = "OnDialogRequest", [1] = wrenchop }) end
         Log("Wrench Option")
         return true
     end
 
-    -- pos button pressed (set left display next)
-    if pktstr:find("buttonClicked|pos") then
-        leftd = true
-        punchset = true
-        ovlay("`4Punch Left Display")
-        return true
+    if pkt:find("buttonClicked|pos") then
+        leftd = true; punchset = true; ovlay("`4Punch Left Display"); return true
     end
 
-    -- gems button pressed (start gem placement)
-    if pktstr:find("buttonClicked|gems") then
-        gem1 = true
-        placeset = true
-        ovlay("`oPlace Left Chandelier\nif Horizontal\n[Chand][`4Put Chand Here`o][Chand]\nif Vertical VVVV\n[Chand]\n[Chand]\n[`4Put Chand Here`o]")
+    if pkt:find("buttonClicked|gems") then
+        gem1 = true; placeset = true
+        ovlay("`oPlace Left Chandelier instructions")
         tol("Place Left Chandelier instructions shown")
         return true
     end
 
-    -- open proxy dialog
-    if pktstr:find("action|dialog_return\ndialog_name|kk\nbuttonClicked|Proxy") then
-        if type(SendVariant) == "function" then
-            SendVariant({ [0] = "OnDialogRequest", [1] = proxy })
-        end
+    if pkt:find("action|dialog_return\ndialog_name|kk\nbuttonClicked|Proxy") then
+        if type(SendVariant) == "function" then SendVariant({ [0] = "OnDialogRequest", [1] = proxy }) end
         Log("Feature list")
         return true
     end
 
-    -- /ac convert BGL via telephone
-    if pktstr:find("/ac") then
+    if pkt:find("/ac") then
         for _, tile in pairs(GetTiles()) do
             if tile.fg == 3898 then
-                local x = tile.x
-                local y = tile.y
+                local x = tile.x; local y = tile.y
                 SendPacket(2, "action|dialog_return\ndialog_name|telephone\nnum|53785|\nx|" .. tostring(x) .. "|\ny|" .. tostring(y) .. "|\nbuttonClicked|bglconvert")
                 return true
             end
         end
     end
 
-    -- drop commands /d /w /b /bb
-    if pktstr:find("/d (%d+)") then
-        local txt = pktstr:match("action|input\n|text|/d (%d+)") or pktstr:match("/d (%d+)")
-        if txt then DropItem(1796, txt); tol("Succes Drop `0"..txt.." `2Diamond Lock"); return true end
-    end
+    -- drop commands
+    local txt = pkt:match("action|input\n|text|/d (%d+)") or pkt:match("/d (%d+)")
+    if txt then DropItem(1796, txt); tol("Succes Drop `0"..txt.." `2Diamond Lock"); return true end
 
-    if pktstr:find("/w (%d+)") then
-        local txt = pktstr:match("action|input\n|text|/w (%d+)") or pktstr:match("/w (%d+)")
-        if txt then DropItem(242, txt); tol("Succes Drop `0"..txt.." `2World Lock"); return true end
-    end
+    txt = pkt:match("action|input\n|text|/w (%d+)") or pkt:match("/w (%d+)")
+    if txt then DropItem(242, txt); tol("Succes Drop `0"..txt.." `2World Lock"); return true end
 
-    if pktstr:find("/b (%d+)") then
-        local txt = pktstr:match("action|input\n|text|/b (%d+)") or pktstr:match("/b (%d+)")
-        if txt then DropItem(7188, txt); tol("`2Succes Drop `0"..txt.." `2Blue Gem Lock"); return true end
-    end
+    txt = pkt:match("action|input\n|text|/b (%d+)") or pkt:match("/b (%d+)")
+    if txt then DropItem(7188, txt); tol("`2Succes Drop `0"..txt.." `2Blue Gem Lock"); return true end
 
-    if pktstr:find("/bb (%d+)") then
-        local txt = pktstr:match("action|input\n|text|/bb (%d+)") or pktstr:match("/bb (%d+)")
-        if txt then
-            if checkitm(11550) == 0 then
-                SendPacket(2,"action|dialog_return\ndialog_name|info_box\nbuttonClicked|make_bgl\n")
-                return true
-            end
-            DropItem(11550, txt)
-            tol("`2Succes Drop `0"..txt.." `bBlack Gem Lock")
+    txt = pkt:match("action|input\n|text|/bb (%d+)") or pkt:match("/bb (%d+)")
+    if txt then
+        if checkitm(11550) == 0 then
+            SendPacket(2,"action|dialog_return\ndialog_name|info_box\nbuttonClicked|make_bgl\n")
             return true
         end
+        DropItem(11550, txt); tol("`2Succes Drop `0"..txt.." `bBlack Gem Lock"); return true
     end
 
-    -- warp /ww
-    if pktstr:find("/ww (.+)") or pktstr:find("/Ww (.+)") then
-        local namew = pktstr:match("/ww (.+)") or pktstr:match("/Ww (.+)")
-        if namew then
-            ovlay("`#Warping To `6"..namew)
-            SendPacket(3, "action|join_request\n|name|"..tostring(namew).."\n|invitedWorld|0")
-            return true
-        end
+    if pkt:find("/ww (.+)") then
+        local namew = pkt:match("/ww (.+)")
+        if namew then ovlay("`#Warping To `6"..namew); SendPacket(3, "action|join_request\n|name|"..tostring(namew).."\n|invitedWorld|0"); return true end
     end
 
-    -- buy dl toggle
-    if pktstr:find("/bdl") then
-        cvdl = not cvdl
-        ovlay(cvdl and "`2Buy Dl Mode Enable" or "`4Buy Dl Mode Disable")
+    if pkt:find("/bdl") then cvdl = not cvdl; ovlay(cvdl and "`2Buy Dl Mode Enable" or "`4Buy Dl Mode Disable"); return true end
+
+    if pkt:find("/help") or pkt:find("/fitur") then
+        tol("Commands: /w /d /b /bb /cd /ac /ww /pos /setb /stax")
         return true
     end
 
-    -- help / fitur
-    if pktstr:find("/help") or pktstr:find("/fitur") or pktstr:find("/Fitur") then
-        tol("`1\nDrop Command >> /w (amount) /d (amount) /b (amount) /bb (amount) /cd (amount)\nConvert Command >> /ac Change BGL /bdl buy dl\nWarp Fast >> /ww (Name World)\nFun Fitur >> /hitam /putih\nSet Pos To Host BTK >>/pos\nSet Back Pos >>/setb")
-        return true
+    if pkt:find("/setb") then
+        bx = math.floor(GetLocal().pos.x / 32); by = math.floor(GetLocal().pos.y / 32)
+        ovlay("Succes Set Back Pos ("..tostring(bx)..", "..tostring(by)..")"); return true
     end
 
-    -- set back pos
-    if pktstr:find("/setb") then
-        bx = math.floor(GetLocal().pos.x / 32)
-        by = math.floor(GetLocal().pos.y / 32)
-        ovlay("Succes Set Back Pos ("..tostring(bx)..", "..tostring(by)..")")
-        return true
-    end
-
-    -- reset chand vertical/horizontal triggers
-    if pktstr:find("\nbuttonClicked|ra") then
+    if pkt:find("\nbuttonClicked|ra") then
         if by == 0 then ovlay("U Didnt Set Back Pos Lol Do /setb") else resetchand1 = true; ovlay("Put Chand Wait"); return true end
     end
-    if pktstr:find("\nbuttonClicked|rd") then
+    if pkt:find("\nbuttonClicked|rd") then
         if by == 0 then ovlay("U Didnt Set Back Pos Lol Do /setb") else resetchand2 = true; ovlay("Put Chand Wait"); return true end
     end
 
-    -- friends -> show proxy list
-    if pktstr:find("friends") then
-        if type(SendVariant) == "function" then SendVariant({ [0] = "OnDialogRequest", [1] = lol }) end
-        tol("Proxy List")
-        return true
-    end
+    if pkt:find("friends") then if type(SendVariant) == "function" then SendVariant({ [0] = "OnDialogRequest", [1] = lol }) end; tol("Proxy List"); return true end
+    if pkt:find("store") then if type(SendVariant) == "function" then SendVariant({ [0] = "OnDialogRequest", [1] = tap }) end; tol("Btk Helperr"); return true end
+    if pkt:find("/pos") then pos_dialog(); return true end
 
-    -- store -> show tap menu
-    if pktstr:find("store") then
-        if type(SendVariant) == "function" then SendVariant({ [0] = "OnDialogRequest", [1] = tap }) end
-        tol("Btk Helperr")
-        return true
-    end
-
-    -- /pos -> open pos dialog
-    if pktstr:find("/pos") or pktstr:find("/Pos") then pos_dialog(); return true end
-
-    -- /cd <amount> -> prepare AutoBtk drop
-    if pktstr:find("/cd (%d+)") or pktstr:find("/Cd (%d+)") then
-        Amount = tonumber(pktstr:match("/cd (%d+)") or pktstr:match("/Cd (%d+)")) or 0
+    if pkt:find("/cd (%d+)") then
+        Amount = tonumber(pkt:match("/cd (%d+)")) or 0
         Log("Use Fitur : /cd")
-        local bgl = math.floor(Amount / 10000)
-        local rem = Amount - bgl * 10000
-        local dl = math.floor(rem / 100)
-        local wl = rem % 100
-        -- store for AutoBtk loop
-        bgl = bgl; dl = dl; wl = wl
+        bgl = math.floor(Amount/10000)
+        local rem = Amount - bgl*10000
+        dl = math.floor(rem/100)
+        wl = rem % 100
         AutoBtk = true
-        local hasil = (bgl ~= 0 and bgl.." `eBlue Gem Lock`0" or "").." "..(dl ~= 0 and dl.." `1Diamond Lock`0" or "").." "..(wl ~= 0 and wl.." `9World Lock`0" or "")
-        tol("`9Total drop : `0"..hasil)
+        local hasil = (bgl ~= 0 and bgl.." BGL " or "") .. (dl ~= 0 and dl.." DL " or "") .. (wl ~= 0 and wl.." WL " or "")
+        tol("Total drop : "..hasil)
         return true
     end
 
-    -- set tax
-    if pktstr:find("/stax (%d+)") or pktstr:find("/Stax (%d+)") then
-        Tax = pktstr:match("/stax (%d+)") or pktstr:match("/Stax (%d+)")
-        ovlay("Tax : "..tostring(Tax).."%")
-        return true
-    end
+    if pkt:find("/stax (%d+)") then Tax = pkt:match("/stax (%d+)") or Tax; ovlay("Tax : "..tostring(Tax).."%"); return true end
 
-    -- take bets button
-    if pktstr:find("\nbuttonClicked|tk") then
+    if pkt:find("\nbuttonClicked|tk") then
         if Tax == 0 then ovlay("`4Set Tax First"); return true end
         colect()
         local tax = math.floor(Amount * Tax / 100)
-        local drop = Amount - tax
+        local dropv = Amount - tax
         local bets = math.floor(Amount / 2)
-        tol("`2Tax : `"..tostring(Tax).."%, `4Total drop : `9"..tostring(drop))
-        tol("`9Succes Take")
-        SendPacket(2,"action|input\n|text|[`#VanzCya`0]`1"..tostring(bets).." (wl) Bets Are and tax is "..tostring(Tax).."% Total Drop: "..tostring(drop).." (wl)")
+        tol("Tax : "..tostring(Tax).."%, Total drop : "..tostring(dropv))
+        tol("Succes Take")
+        SendPacket(2,"action|input\n|text|[`#VanzCya`] "..tostring(bets).." (wl) Bets Are and tax is "..tostring(Tax).."% Total Drop: "..tostring(dropv).." (wl)")
         return true
     end
 
-    -- win buttons (drop to winner)
-    if pktstr:find("\nbuttonClicked|w1") then
+    if pkt:find("\nbuttonClicked|w1") then
         if Tax == 0 then ovlay("`4Set Tax First"); return true end
-        local bgl = math.floor(drop/10000); drop = drop - bgl*10000
-        local dl = math.floor(drop/100); local wl = drop % 100
+        bgl = math.floor(drop/10000); drop = drop - bgl*10000
+        dl = math.floor(drop/100); wl = drop % 100
         SendPacketRaw(false, { type = 0, x = (PX1 - 2) * 32, y = (PY1) * 32, state = 32 })
         AutoBtk = true
-        local hasil = (bgl ~= 0 and bgl.." `eBlue Gem Lock`0" or "").." "..(dl ~= 0 and dl.." `1Diamond Lock`0" or "").." "..(wl ~= 0 and wl.." `9World Lock`0" or "")
-        tol("`9Amount Lock : "..tostring(Amount))
-        tol("`9Tax : "..tostring(Tax).."%")
-        tol("`9Total drop : `0"..hasil.." `4Tax Reset")
+        tol("Amount Lock : "..tostring(Amount))
+        tol("Tax : "..tostring(Tax).."%")
+        tol("Total drop : reset")
         return true
     end
 
-    if pktstr:find("\nbuttonClicked|w2") then
+    if pkt:find("\nbuttonClicked|w2") then
         if Tax == 0 then ovlay("`4Set Tax first"); return true end
-        local bgl = math.floor(drop/10000); drop = drop - bgl*10000
-        local dl = math.floor(drop/100); local wl = drop % 100
+        bgl = math.floor(drop/10000); drop = drop - bgl*10000
+        dl = math.floor(drop/100); wl = drop % 100
         SendPacketRaw(false, { type = 0, x = (PX2 + 2) * 32, y = (PY2) * 32, state = 48 })
         AutoBtk = true
-        local hasil = (bgl ~= 0 and bgl.." `eBlue Gem Lock`0" or "").." "..(dl ~= 0 and dl.." `1Diamond Lock`0" or "").." "..(wl ~= 0 and wl.." `9World Lock`0" or "")
-        tol("`9Amount Lock : "..tostring(Amount))
-        tol("`9Tax : "..tostring(Tax).."%")
-        tol("`9Total drop : `0"..hasil.." `4Tax Reset")
+        tol("Amount Lock : "..tostring(Amount))
+        tol("Tax : "..tostring(Tax).."%")
+        tol("Total drop : reset")
         return true
     end
 
@@ -475,7 +404,7 @@ AddHook("OnSendPacket", "packet", function(packet)
 end)
 
 -- =========================
--- Hook: OnVariant (incoming variants)
+-- OnVariant handler
 -- =========================
 AddHook("OnVariant", "var", function(var)
     if not var or type(var) ~= "table" then return false end
@@ -520,12 +449,11 @@ AddHook("OnVariant", "var", function(var)
 end)
 
 -- =========================
--- Hook: OnSendPacketRaw (detect tile clicks / placements)
+-- OnSendPacketRaw handler (tile clicks / placements)
 -- =========================
 AddHook("OnSendPacketRaw", "rawr", function(a)
     if not a or type(a) ~= "table" then return false end
 
-    -- detect display click (type 3, value 18)
     if a.type == 3 and a.value == 18 then
         if punchset == true then
             for _, display in pairs(GetTiles()) do
@@ -549,7 +477,6 @@ AddHook("OnSendPacketRaw", "rawr", function(a)
         return true
     end
 
-    -- detect chandelier placement (type 3, value 5640)
     if a.type == 3 and a.value == 5640 then
         if placeset == true then
             for _, display in pairs(GetTiles()) do
@@ -564,7 +491,7 @@ AddHook("OnSendPacketRaw", "rawr", function(a)
                                 { x = xgem2, y = ygem1 }, { x = xgem3, y = ygem1 }
                             },
                             pos2 = {
-                                { x = xgemm1, y = ygemm1 }, { x = xgemm1, y = ygemm2 }, { x = xgemm1, y = xgemm3 },
+                                { x = xgemm1, y = ygemm1 }, { x = xgemm1, y = ygemm2 }, { x = xgemm1, y = ygemm3 },
                                 { x = xgemm2, y = ygemm1 }, { x = xgemm3, y = ygemm1 }
                             }
                         }
@@ -601,15 +528,14 @@ AddHook("OnSendPacketRaw", "rawr", function(a)
 end)
 
 -- =========================
--- Collect helpers used by resetchand routines
+-- collect / colecp helpers (safe)
 -- =========================
-local function collect()
+local function collect_safe()
     local Count = 0
     data = {}
     local objects = GetObjectList()
     if not objects or not tile or not tile.pos1 or not tile.pos2 then return end
 
-    -- count pos1
     for _, obj in pairs(objects) do
         for _, t in pairs(tile.pos1) do
             if obj.id == 112 and math.floor(obj.pos.x/32) == t.x and math.floor(obj.pos.y/32) == t.y then
@@ -618,10 +544,8 @@ local function collect()
             end
         end
     end
-    table.insert(data, Count)
-    Count = 0
+    table.insert(data, Count); Count = 0
 
-    -- count pos2
     for _, obj in pairs(objects) do
         for _, t in pairs(tile.pos2) do
             if obj.id == 112 and math.floor(obj.pos.x/32) == t.x and math.floor(obj.pos.y/32) == t.y then
@@ -630,48 +554,22 @@ local function collect()
             end
         end
     end
-    table.insert(data, Count)
-    Count = 0
+    table.insert(data, Count); Count = 0
 
-    -- announce result
     if (data[1] or 0) > (data[2] or 0) then
-        SendPacket(2,"action|input\n|text|`0 [`2Win`0] `1G`3e`5m`#s : `9"..tostring(data[1]).." (gems) VS `4, `1G`3e`5m`#s : `9"..tostring(data[2]).." (gems) `0[`4L`7o`5s`4e`0]")
+        SendPacket(2,"action|input\n|text|`0 [`2Win`0] `1Gems : `9"..tostring(data[1]).." VS `4"..tostring(data[2]).." `0[`4Lose`0]")
     elseif (data[1] or 0) == (data[2] or 0) then
-        SendPacket(2,"action|input\n|text|`0[`1T`3i`ee`0]`0 `1G`3e`5m`#s : `9"..tostring(data[1]).." (gems) VS `0, `1G`3e`5m`#s : `9"..tostring(data[2]).." `0[`1T`3i`ee`0]")
+        SendPacket(2,"action|input\n|text|`0[`1Tie`0] `1Gems : `9"..tostring(data[1]).." VS `9"..tostring(data[2]).." `0[`1Tie`0]")
     else
-        SendPacket(2,"action|input\n|text|`0 [`4L`7o`5s`4e`0] `1G`3e`5m`#s : `9"..tostring(data[1]).." (gems) VS `4, `1G`3e`5m`#s : `9"..tostring(data[2]).." `0[`2Win`0]")
+        SendPacket(2,"action|input\n|text|`0 [`4Lose`0] `1Gems : `9"..tostring(data[1]).." VS `2"..tostring(data[2]).." `0[`2Win`0]")
     end
     data = {}
 end
 
--- colecp1..4 (safe versions)
-local function colecp1()
-    if not tile or not tile.pos1 then return end
-    for _, obj in pairs(GetObjectList()) do
-        for _, t in pairs(tile.pos1) do
-            if obj.id == 112 and math.floor(obj.pos.x/32) == t.x and math.floor(obj.pos.y/32) == t.y then
-                SendPacketRaw(false, { type = 11, value = obj.oid or obj.netid, x = obj.pos.x, y = obj.pos.y })
-            end
-        end
-    end
-end
-local function colecp2()
-    if not tile or not tile.pos2 then return end
-    for _, obj in pairs(GetObjectList()) do
-        for _, t in pairs(tile.pos2) do
-            if obj.id == 112 and math.floor(obj.pos.x/32) == t.x and math.floor(obj.pos.y/32) == t.y then
-                SendPacketRaw(false, { type = 11, value = obj.oid or obj.netid, x = obj.pos.x, y = obj.pos.y })
-            end
-        end
-    end
-end
+local function colecp1() if tile and tile.pos1 then for _, obj in pairs(GetObjectList()) do for _, t in pairs(tile.pos1) do if obj.id == 112 and math.floor(obj.pos.x/32) == t.x and math.floor(obj.pos.y/32) == t.y then SendPacketRaw(false, { type = 11, value = obj.oid or obj.netid, x = obj.pos.x, y = obj.pos.y }) end end end end end
+local function colecp2() if tile and tile.pos2 then for _, obj in pairs(GetObjectList()) do for _, t in pairs(tile.pos2) do if obj.id == 112 and math.floor(obj.pos.x/32) == t.x and math.floor(obj.pos.y/32) == t.y then SendPacketRaw(false, { type = 11, value = obj.oid or obj.netid, x = obj.pos.x, y = obj.pos.y }) end end end end end
 local function colecp3() colecp1() end
 local function colecp4() colecp2() end
-
--- =========================
--- Wrench mode toggles handled earlier in OnSendPacket; handle wrench actions here
--- =========================
--- (OnSendPacket already handles action|wrench events by matching packet strings)
 
 -- =========================
 -- Init messages
@@ -682,7 +580,7 @@ ovlay("Type /help or /fitur to show feature")
 SendPacket(2,"action|input\n|text|Script Proxy Bothax By VanzCya")
 
 -- =========================
--- Main loop (AutoBtk, resetchand, relog)
+-- Main loop
 -- =========================
 while true do
     SleepS(0.5)
@@ -693,32 +591,27 @@ while true do
         if (bgl or 0) > 0 then DropItem(7188, bgl); SleepS(0.5) end
         if (dl or 0) > 0 then DropItem(1796, dl); SleepS(0.5) end
         if (wl or 0) > 0 then DropItem(242, wl) end
-        drop = ""
-        Amount = ""
-        AutoBtk = false
+        drop = ""; Amount = ""; AutoBtk = false
     end
 
     if resetchand1 then
         SleepS(0.5)
-        -- move to left gems and place chand sequence (kept original behavior)
         if xgem1 and ygem2 then
             FindPath(xgem1, ygem2)
             ChangeFeature("Modfly", true)
             SleepS(0.2)
-            local pkt = { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgem1, py = ygem1, value = 5640, state = 16 }
-            SendPacketRaw(false, pkt); SleepS(0.2)
-            pkt = { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgem1, py = ygem2, value = 5640, state = 16 }
-            SendPacketRaw(false, pkt); SleepS(0.2)
-            pkt = { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgem1, py = ygem3, value = 5640, state = 16 }
-            SendPacketRaw(false, pkt); SleepS(0.2)
+            SendPacketRaw(false, { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgem1, py = ygem1, value = 5640, state = 16 })
+            SleepS(0.2)
+            SendPacketRaw(false, { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgem1, py = ygem2, value = 5640, state = 16 })
+            SleepS(0.2)
+            SendPacketRaw(false, { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgem1, py = ygem3, value = 5640, state = 16 })
             colecp1(); SleepS(0.2)
             FindPath(xgemm1, ygemm2); SleepS(0.2)
-            pkt = { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgemm1, py = ygemm1, value = 5640, state = 16 }
-            SendPacketRaw(false, pkt); SleepS(0.2)
-            pkt = { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgemm1, py = ygemm2, value = 5640, state = 16 }
-            SendPacketRaw(false, pkt); SleepS(0.2)
-            pkt = { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgemm1, py = ygemm3, value = 5640, state = 16 }
-            SendPacketRaw(false, pkt); SleepS(0.2)
+            SendPacketRaw(false, { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgemm1, py = ygemm1, value = 5640, state = 16 })
+            SleepS(0.2)
+            SendPacketRaw(false, { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgemm1, py = ygemm2, value = 5640, state = 16 })
+            SleepS(0.2)
+            SendPacketRaw(false, { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgemm1, py = ygemm3, value = 5640, state = 16 })
             colecp2(); SleepS(0.2)
             FindPath(bx, by)
             ChangeFeature("Modfly", false)
@@ -731,22 +624,20 @@ while true do
         if xgem1 and ygem1 and xgem2 and xgem3 and xgemm1 and xgemm2 and xgemm3 then
             FindPath(xgem1 + 2, ygem1); SleepS(0.1)
             FindPath(xgem1, ygem1); SleepS(0.25)
-            local pkt = { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgem1, py = ygem1, value = 5640, state = 16 }
-            SendPacketRaw(false, pkt); SleepS(0.25)
-            pkt = { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgem2, py = ygem1, value = 5640, state = 16 }
-            SendPacketRaw(false, pkt); SleepS(0.25)
-            pkt = { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgem3, py = ygem1, value = 5640, state = 16 }
-            SendPacketRaw(false, pkt); SleepS(0.25)
+            SendPacketRaw(false, { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgem1, py = ygem1, value = 5640, state = 16 })
+            SleepS(0.25)
+            SendPacketRaw(false, { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgem2, py = ygem1, value = 5640, state = 16 })
+            SleepS(0.25)
+            SendPacketRaw(false, { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgem3, py = ygem1, value = 5640, state = 16 })
             colecp3(); SleepS(0.5)
             FindPath(xgem1 + 4, ygem1); SleepS(0.1)
             FindPath(xgemm1 - 2, ygemm1); SleepS(0.1)
             FindPath(xgemm1, ygemm1); SleepS(0.25)
-            pkt = { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgemm1, py = ygemm1, value = 5640, state = 16 }
-            SendPacketRaw(false, pkt); SleepS(0.25)
-            pkt = { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgemm2, py = ygemm1, value = 5640, state = 16 }
-            SendPacketRaw(false, pkt); SleepS(0.25)
-            pkt = { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgemm3, py = ygemm1, value = 5640, state = 16 }
-            SendPacketRaw(false, pkt); SleepS(0.25)
+            SendPacketRaw(false, { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgemm1, py = ygemm1, value = 5640, state = 16 })
+            SleepS(0.25)
+            SendPacketRaw(false, { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgemm2, py = ygemm1, value = 5640, state = 16 })
+            SleepS(0.25)
+            SendPacketRaw(false, { type = 3, x = GetLocal().pos.x, y = GetLocal().pos.y, px = xgemm3, py = ygemm1, value = 5640, state = 16 })
             colecp4(); SleepS(0.5)
             FindPath(bx, by)
         end
