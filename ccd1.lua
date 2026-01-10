@@ -1,12 +1,12 @@
--- bothax_fixed.lua
--- Versi: kompatibel Bothax (safe wrappers + pkt_to_str)
+-- bothax_bothax-ready.lua
+-- Versi perbaikan: kompatibel Bothax (safe wrappers + pkt_to_str)
 -- Perhatian: paste seluruh file ini menggantikan file lama
 
 -- =========================
--- Compatibility shim
+-- Compatibility shim (safe wrappers)
 -- =========================
 
--- Safe Sleep / sleep
+-- Sleep / sleep compatibility (safe no-op fallback)
 if type(Sleep) ~= "function" and type(sleep) == "function" then
     Sleep = sleep
 end
@@ -20,25 +20,25 @@ if type(sleep) ~= "function" then
     sleep = function(ms) end
 end
 
--- Safe SendPacket / SendPacketRaw
+-- Ensure SendPacket exists
 if type(SendPacket) ~= "function" then
     SendPacket = function(...) end
 end
 
+-- SendPacketRaw fallback (emulate minimal behavior)
 if type(SendPacketRaw) ~= "function" then
-    -- try to adapt if only SendPacket exists
     SendPacketRaw = function(flag_or_pkt, pkt)
         if type(flag_or_pkt) == "boolean" and type(pkt) == "table" and pkt.type then
             pcall(function() SendPacket(pkt.type, tostring(pkt.value or "")) end)
         elseif type(flag_or_pkt) == "table" and flag_or_pkt.type then
             pcall(function() SendPacket(flag_or_pkt.type, tostring(flag_or_pkt.value or "")) end)
         else
-            -- no-op fallback
+            -- no-op
         end
     end
 end
 
--- Safe SendVariant / SendVariantList
+-- SendVariant / SendVariantList safe wrapper
 local _SendVariant = nil
 if type(SendVariant) == "function" then
     _SendVariant = SendVariant
@@ -51,29 +51,24 @@ end
 local function SendVariantSafe(var, netid, delay)
     netid = netid or -1
     delay = delay or 0
-    -- try call with (var, netid, delay) if supported, else fallback
     local ok, err = pcall(function() _SendVariant(var, netid, delay) end)
     if not ok then
         pcall(function() _SendVariant(var) end)
     end
 end
 
--- Safe AddHook
+-- AddHook fallback (no-op if not present)
 if type(AddHook) ~= "function" then
     AddHook = function(...) end
 end
 
 -- Helper: convert packet/variant to string safely for pattern matching
 local function pkt_to_str(p)
-    if type(p) == "string" then
-        return p
-    end
+    if type(p) == "string" then return p end
     if type(p) == "table" then
-        -- try common fields first
-        if p[1] and type(p[1]) == "string" then
-            return p[1]
-        end
-        -- concatenate values to a string for pattern matching
+        -- common case: var[1] contains dialog text or packet string
+        if p[1] and type(p[1]) == "string" then return p[1] end
+        -- if it's a packet table with fields, try to build a string
         local s = ""
         for k, v in pairs(p) do
             if type(v) == "string" then
@@ -84,10 +79,10 @@ local function pkt_to_str(p)
         end
         return s
     end
-    return tostring(p)
+    return tostring(p or "")
 end
 
--- Safe ovlay wrapper using SendVariantSafe
+-- Safe overlay helper
 local function ovlay_safe(str)
     local var = {}
     var[0] = "OnTextOverlay"
@@ -138,7 +133,7 @@ count = 0;
 data = {}
 
 function pos()
-    var = {}
+    local var = {}
     var[0] = "OnDialogRequest"
     var[1] = [[
 add_label_with_icon|big|Set Our Pos To Host|left|1422|
@@ -206,7 +201,6 @@ add_label_with_icon|big|`oBtk Helperrrrrrrrr|left|340|
 add_textbox|Tap Ae Gems Store Nanti Show menu|
 ]]
 
-
 cvdl = false
 pull = false
 kick = false
@@ -240,14 +234,14 @@ function Data()
 end
 
 function colect()
-    tiles = {
-        {PX1, PY1}, 
+    local tiles = {
+        {PX1, PY1},
         {PX2, PY2}
     }
-    objects = GetObjectList()
+    local objects = GetObjectList()
     for _, obj in pairs(objects) do
-        for _, tiles in pairs(tiles) do
-            if (obj.pos.x)//32 == tiles[1] and (obj.pos.y)//32 == tiles[2] then
+        for _, t in pairs(tiles) do
+            if (obj.pos.x)//32 == t[1] and (obj.pos.y)//32 == t[2] then
                 SendPacketRaw(false, {type=11,value=obj.oid,x=obj.pos.x,y=obj.pos.y})
                 table.insert(data, {id=obj.id, count=obj.amount})
             end
@@ -267,7 +261,7 @@ function checkitm(id)
 end
 
 function wear(id)
-    pkt = {}
+    local pkt = {}
     pkt.type = 10
     pkt.value = id
     SendPacketRaw(false, pkt)
@@ -284,14 +278,18 @@ function tol(txt)
     LogToConsole("`o[`#VanzCyaScript#001`o] `6"..txt)
 end
 
--- Hook: OnSendPacket (safe: handle string or table)
+-- =========================
+-- Hooks (menggunakan pkt_to_str untuk aman)
+-- =========================
+
+-- OnSendPacket handler
 AddHook("OnSendPacket", "packet",
 function(packet)
     local pkt = pkt_to_str(packet)
 
     if pkt:find("/test (.+)") then
-        yes = pkt:match("/test (.+)")
-        var = {}
+        local yes = pkt:match("/test (.+)")
+        local var = {}
         var[0] = "OnTalkBubble"
         var[1] = (GetLocal() and GetLocal().netid) or 0
         var[2] = ""..yes..""
@@ -311,7 +309,7 @@ function(packet)
     end
 
     if pkt:find("action|dialog_return\ndialog_name|kk\nbuttonClicked|Wrench") then
-        var = {}
+        local var = {}
         var[0] = "OnDialogRequest"
         var[1] = wrenchop
         SendVariantSafe(var)
@@ -333,7 +331,7 @@ function(packet)
     end
 
     if pkt:find("action|dialog_return\ndialog_name|kk\nbuttonClicked|Proxy") then
-        var = {}
+        local var = {}
         var[0] = "OnDialogRequest"
         var[1] = proxy
         SendVariantSafe(var)
@@ -344,8 +342,8 @@ function(packet)
     if pkt:find("/ac") then
         for _, tile in pairs(GetTiles()) do
             if tile.fg == 3898 then
-                x = tile.x
-                y = tile.y
+                local x = tile.x
+                local y = tile.y
                 SendPacket(2, "action|dialog_return\ndialog_name|telephone\nnum|53785|\nx|" .. x .. "|\ny|" .. y .. "|\nbuttonClicked|bglconvert")
                 return true
             end
@@ -353,14 +351,14 @@ function(packet)
     end
 
     if pkt:find("/d (%d+)") then
-        txt = pkt:match("/d (%d+)")
+        local txt = pkt:match("/d (%d+)")
         DropItem(1796, txt)
         tol("Succes Drop `0"..txt.." `2Diamond Lock")
         return true
     end
 
     if pkt:find("/w (%d+)") then
-        txt = pkt:match("/w (%d+)")
+        local txt = pkt:match("/w (%d+)")
         DropItem(242, txt)
         tol("Succes Drop `0"..txt.." `2World Lock")
         return true
@@ -385,7 +383,7 @@ action|input
 |text|`0ORA PERLU GANTENG SING PENTING PUTIH!]])
         return true
     end
-      
+
     if pkt:find("/bdl") then
         if cvdl == false then
             cvdl = true
@@ -400,14 +398,14 @@ action|input
     end
 
     if pkt:find("/b (%d+)") then
-        txt = pkt:match("/b (%d+)")
+        local txt = pkt:match("/b (%d+)")
         DropItem(7188, txt)
         tol("`2Succes Drop `0"..txt.." `2Blue Gem Lock")
         return true
     end
 
     if pkt:find("/ww (.+)") or pkt:find("/Ww (.+)") then
-        namew = pkt:match("/ww (.+)") or pkt:match("/Ww (.+)")
+        local namew = pkt:match("/ww (.+)") or pkt:match("/Ww (.+)")
         ovlay("`#Warping To `6"..namew)
         SendPacket(3, "action|join_request\n|name|"..namew.."\n|invitedWorld|0")
         return true
@@ -421,7 +419,7 @@ action|input
     end
 
     if pkt:find("/bb (%d+)") or pkt:find("/Bb (%d+)") then
-        txt = pkt:match("/bb (%d+)") or pkt:match("/Bb (%d+)")
+        local txt = pkt:match("/bb (%d+)") or pkt:match("/Bb (%d+)")
         DropItem(11550, txt)
         tol("`2Succes Drop `0"..txt.." `bBlack Gem Lock")
         return true
@@ -460,7 +458,7 @@ action|input
     end
 
     if pkt:find("friends") then
-        var = {}
+        local var = {}
         var[0] = "OnDialogRequest"
         var[1] = lol
         SendVariantSafe(var)
@@ -469,7 +467,7 @@ action|input
     end
 
     if pkt:find("store") then
-        var = {}
+        local var = {}
         var[0] = "OnDialogRequest"
         var[1] = tap
         SendVariantSafe(var)
@@ -486,7 +484,7 @@ action|input
         Amount = pkt:match("/cd (%d+)") or pkt:match("/Cd (%d+)")
         LogToConsole("`9Use Fitur : /cd")
         bgl = math.floor(Amount/10000)
-        Amount = Amount - bgl*10000 
+        Amount = Amount - bgl*10000
         dl = math.floor(Amount/100)
         wl = Amount % 100
         AutoBtk = true
@@ -497,7 +495,7 @@ action|input
 
     if pkt:find("/stax (%d+)") or pkt:find("/Stax (%d+)") then
         Tax = pkt:match("/stax (%d+)") or pkt:match("/Stax (%d+)")
-        ovlay("Tax : "..Tax.."%") 
+        ovlay("Tax : "..Tax.."%")
     end
 
     if pkt:find("\nbuttonClicked|tk") then
@@ -520,7 +518,7 @@ action|input
             ovlay("`4Set Tax First")
         else
             bgl = math.floor(drop/10000)
-            drop = drop - bgl*10000 
+            drop = drop - bgl*10000
             dl = math.floor(drop/100)
             wl = drop % 100
             SendPacketRaw(false, { type = 0, x = (PX1 - 2) * 32, y = (PY1) * 32, state = 32 })
@@ -538,7 +536,7 @@ action|input
             ovlay("`4Set Tax first")
         else
             bgl = math.floor(drop/10000)
-            drop = drop - bgl*10000 
+            drop = drop - bgl*10000
             dl = math.floor(drop/100)
             wl = drop % 100
             SendPacketRaw(false, { type = 0, x = (PX2 + 2) * 32, y = (PY2) * 32, state = 48 })
@@ -560,7 +558,7 @@ action|input
     return false
 end)
 
--- Hook: OnVariant (already receives table)
+-- OnVariant handler
 AddHook("OnVariant", "var",
 function(var)
     if not var then return false end
@@ -570,23 +568,23 @@ function(var)
         tol("`9Type /fitur to show feature")
         return true
     end
-      
+
     if tostring(var[0] or ""):find("OnDialogRequest") and tostring(var[1] or ""):find("end_dialog|telephone") then
         if cvdl == true then
-            SendPacket(2, "action|dialog_return\ndialog_name|telephone\nnum|53785|\nx|"..(var[1]:match("embed_data|x|(%d+)") or "").."|\ny|"..(var[1]:match("embed_data|y|(%d+)") or "").."|\nbuttonClicked|dlconvert")
+            SendPacket(2, "action|dialog_return\ndialog_name|telephone\nnum|53785|\nx|"..(tostring(var[1] or ""):match("embed_data|x|(%d+)") or "").."|\ny|"..(tostring(var[1] or ""):match("embed_data|y|(%d+)") or "").."|\nbuttonClicked|dlconvert")
             return true
         end
     end
-    
+
     if var[0] == "OnTalkBubble" and tostring(var[2] or ""):find("spun the wheel and got") and
        (tostring(var[2] or ""):find("`4(%d+)``!") or tostring(var[2] or ""):find("`b(%d+)``!") or tostring(var[2] or ""):find("`2(%d+)``!")) then
-        SpunNumber = tostring(var[2] or ""):match("`4(%d+)``!") or tostring(var[2] or ""):match("`b(%d+)``!") or tostring(var[2] or ""):match("`2(%d+)``!")
-        Num1, Num2 = SpunNumber//10, SpunNumber%10
-        Reme = Num1 + Num2
-        if Reme > 10 then 
+        local SpunNumber = tostring(var[2] or ""):match("`4(%d+)``!") or tostring(var[2] or ""):match("`b(%d+)``!") or tostring(var[2] or ""):match("`2(%d+)``!")
+        local Num1, Num2 = SpunNumber//10, SpunNumber%10
+        local Reme = Num1 + Num2
+        if Reme > 10 then
             Reme = Reme%10
         elseif Reme == 10 then
-             Reme = "`20"
+            Reme = "`20"
         end
         var[0] = "OnTalkBubble"
         var[1] = var[1]
@@ -612,7 +610,7 @@ function(var)
     return false
 end)
 
--- Hook: OnSendPacketRaw (tile clicks, chand placement)
+-- OnSendPacketRaw handler
 AddHook("OnSendPacketRaw", "rawr",
 function(a)
     if not a or type(a) ~= "table" then return false end
@@ -658,11 +656,11 @@ function(a)
                         xgem3 = xgem1 - 1
                         ygem3 = ygem1 - 2
                         tile = {
-                            pos1 = { 
-                                {x = xgem1, y = ygem1}, {x = xgem1, y = ygem2}, {x = xgem1, y = ygem3}, {x = xgem2, y = ygem1}, {x = xgem3, y = ygem1} 
+                            pos1 = {
+                                {x = xgem1, y = ygem1}, {x = xgem1, y = ygem2}, {x = xgem1, y = ygem3}, {x = xgem2, y = ygem1}, {x = xgem3, y = ygem1}
                             },
                             pos2 = {
-                                {x = xgemm1, y = ygemm1}, {x = xgemm1, y = ygemm2}, {x = xgemm1, y = ygemm3}, {x = xgemm2, y = ygemm1}, {x = xgemm3, y = ygemm1} 
+                                {x = xgemm1, y = ygemm1}, {x = xgemm1, y = ygemm2}, {x = xgemm1, y = ygemm3}, {x = xgemm2, y = ygemm1}, {x = xgemm3, y = ygemm1}
                             }
                         }
                         gem1 = false
@@ -677,11 +675,11 @@ function(a)
                         xgemm3 = xgemm1 - 1
                         ygemm3 = ygemm1 - 2
                         tile = {
-                            pos1 = { 
-                                {x = xgem1, y = ygem1}, {x = xgem1, y = ygem2}, {x = xgem1, y = ygem3}, {x = xgem2, y = ygem1}, {x = xgem3, y = ygem1} 
+                            pos1 = {
+                                {x = xgem1, y = ygem1}, {x = xgem1, y = ygem2}, {x = xgem1, y = ygem3}, {x = xgem2, y = ygem1}, {x = xgem3, y = ygem1}
                             },
                             pos2 = {
-                                {x = xgemm1, y = ygemm1}, {x = xgemm1, y = ygemm2}, {x = xgemm1, y = ygemm3}, {x = xgemm2, y = ygemm1}, {x = xgemm3, y = ygemm1} 
+                                {x = xgemm1, y = ygemm1}, {x = xgemm1, y = ygemm2}, {x = xgemm1, y = ygemm3}, {x = xgemm2, y = ygemm1}, {x = xgemm3, y = ygemm1}
                             }
                         }
                         gem2 = false
@@ -700,6 +698,7 @@ function(a)
     return false
 end)
 
+-- Init messages
 ovlay("Script Has Ben Run")
 Sleep(2000)
 ovlay("Type /help or /fitur to show feature")
@@ -739,7 +738,7 @@ while true do
         FindPath(xgem1, ygem2)
         ChangeFeature("Modfly", true)
         Sleep(200)
-        pkt = {}
+        local pkt = {}
         pkt.type = 3
         pkt.x = GetLocal().pos.x
         pkt.y = GetLocal().pos.y
@@ -814,7 +813,7 @@ while true do
         Sleep(100)
         FindPath(xgem1, ygem1)
         Sleep(250)
-        pkt = {}
+        local pkt = {}
         pkt.type = 3
         pkt.x = GetLocal().pos.x
         pkt.y = GetLocal().pos.y
