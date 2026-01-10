@@ -4,6 +4,9 @@
 -- =========================
 -- Compatibility shim (safe fallbacks)
 -- =========================
+
+
+
 if type(Sleep) ~= "function" and type(sleep) == "function" then Sleep = sleep end
 if type(sleep) ~= "function" and type(Sleep) == "function" then sleep = function(ms) Sleep(ms) end end
 if type(Sleep) ~= "function" then Sleep = function(ms) end end
@@ -49,6 +52,27 @@ LogToConsole = LogToConsole or function(...) end
 -- =========================
 -- Helpers
 -- =========================
+
+-- Fallback menubar (jika fungsi menubar asli hilang)
+if type(menubar) ~= "function" then
+    function menubar()
+        local dlg = {}
+        dlg[0] = "OnDialogRequest"
+        dlg[1] = [[
+add_label_with_icon|big|Menu|left|2480|
+add_textbox|`9GrowID : ]] .. (GetLocal() and GetLocal().name or "Unknown") .. [[|
+add_spacer|small|
+add_button_with_icon|commandftr|`9Commands|staticYellowFrame|5770||
+add_button_with_icon|wrenchlist|`aWrench Mode|staticYellowFrame|32||
+add_button_with_icon|proxy|`bProxy|staticYellowFrame|10864||
+add_button_with_icon|tap|`eBTK|staticYellowFrame|340||
+add_spacer|small|
+end_dialog|cmdend|Close|
+]]
+        SendVariantSafe(dlg)
+    end
+end
+
 local function truncate_str(s, n)
     s = tostring(s or "")
     if #s > n then return s:sub(1, n) .. "..." end
