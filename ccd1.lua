@@ -1,6 +1,70 @@
 -- test.lua (Bothax-compatible rewrite)
 -- Adapted from original VanzCya script, preserves original features
+-- ===== Hook compatibility + debug shim =====
+local function safe_find_fn(names)
+  for _, n in ipairs(names) do
+    if type(_G[n]) == "function" then return _G[n] end
+  end
+  return nil
+end
 
+-- safe Log
+LogToConsole = LogToConsole or safe_find_fn({"LogToConsole","logToConsole"}) or function() end
+local function D(msg) LogToConsole("[HOOKDBG] "..tostring(msg)) end
+
+-- wrapper to register same handler for multiple possible event names
+local function register_hooks(id, handler)
+  local names = {
+    "OnSendPacket", "OnTextPacket", "OnText", "OnSendText",    -- text/send packet variants
+    "OnVariant", "OnVarlist", "OnDialogRequest",              -- variant/varlist variants
+    "OnSendPacketRaw", "OnRecvPacketRaw", "OnRawPacket",      -- raw packet variants
+    "OnRecvPacket", "OnRecv", "OnPacket"                      -- other possible names
+  }
+  for _, name in ipairs(names) do
+    if type(AddHook) == "function" then
+      local ok, err = pcall(function() AddHook(name, id.."_"..name, handler) end)
+      if ok then D("registered hook: "..name.." as "..id.."_"..name) end
+    end
+  end
+end
+
+-- generic debug handler that logs incoming events (keeps original handler behavior separate)
+local function debug_any(type_or_var, payload)
+  -- try to stringify small payload safely
+  local s = ""
+  if type(type_or_var) == "string" then s = type_or_var else s = tostring(type_or_var) end
+  D("event fired: "..s)
+  -- also show short payload preview if table
+  if type(payload) == "table" then
+    local preview = {}
+    for k,v in pairs(payload) do
+      table.insert(preview, tostring(k)..":"..tostring(v))
+      if #preview >= 6 then break end
+    end
+    D(" payload preview: "..table.concat(preview, ", "))
+  else
+    if payload ~= nil then D(" payload: "..tostring(payload)) end
+  end
+  return false
+end
+
+-- register debug hooks for many event names so we can see what executor actually calls
+register_hooks("dbg", function(a,b) return debug_any(a,b) end)
+
+-- small test dialog to verify SendVariant works (will show a tiny dialog)
+local function test_dialog()
+  local v = { [0] = "OnDialogRequest", [1] = "add_label_with_icon|big|HOOK TEST|left|0|\nadd_quick_exit|\nend_dialog|x|Close||" }
+  if type(SendVariant) == "function" then
+    local ok,err = pcall(function() SendVariant(v, -1, 100) end)
+    if ok then D("test dialog sent via SendVariant") else D("SendVariant call failed: "..tostring(err)) end
+  else
+    D("SendVariant not defined in environment")
+  end
+end
+
+-- run quick test dialog once after short delay
+pcall(function() Sleep(500); test_dialog() end)
+-- ===== end shim =====
 -- =========================
 -- Compatibility shim
 -- =========================
