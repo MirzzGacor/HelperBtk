@@ -1,6 +1,6 @@
--- bothax_bothax-ready.lua
--- Versi perbaikan: kompatibel Bothax (safe wrappers + pkt_to_str)
--- Perhatian: paste seluruh file ini menggantikan file lama
+-- bothax_bothax-fixed.lua
+-- Versi: diperbaiki agar support Bothax executor
+-- Perubahan: pkt_to_str, SendVariantSafe, SendPacketRaw fallback, Sleep fallback
 
 -- =========================
 -- Compatibility shim (safe wrappers)
@@ -89,6 +89,9 @@ local function ovlay_safe(str)
     var[1] = str
     SendVariantSafe(var)
 end
+
+-- Alias ovlay to safe version for compatibility with original code
+ovlay = ovlay_safe
 
 -- =========================
 -- Original script (dengan penyesuaian pemanggilan SendVariantSafe, pkt_to_str)
