@@ -1,7 +1,9 @@
--- bothax_bothax-fixed-final.lua
--- Full script — perbaikan guard untuk /fitur dan error indexing nil/number
+-- bothax_bothax-debug.lua
+-- Versi debug: guard ketat + debug logging untuk menemukan "attempt to index a number value"
 
+-- =========================
 -- Compatibility shim (safe fallbacks)
+-- =========================
 if type(Sleep) ~= "function" and type(sleep) == "function" then Sleep = sleep end
 if type(sleep) ~= "function" and type(Sleep) == "function" then sleep = function(ms) Sleep(ms) end end
 if type(Sleep) ~= "function" then Sleep = function(ms) end end
@@ -32,6 +34,7 @@ end
 
 if type(AddHook) ~= "function" then AddHook = function(...) end end
 
+-- Safe getters
 GetLocal = GetLocal or function() return nil end
 GetTiles = GetTiles or function() return {} end
 GetObjectList = GetObjectList or function() return {} end
@@ -43,7 +46,15 @@ FindPath = FindPath or function(...) end
 ChangeFeature = ChangeFeature or function(...) end
 LogToConsole = LogToConsole or function(...) end
 
--- Helper: convert packet/variant to string safely
+-- =========================
+-- Helpers
+-- =========================
+local function truncate_str(s, n)
+    s = tostring(s or "")
+    if #s > n then return s:sub(1, n) .. "..." end
+    return s
+end
+
 local function pkt_to_str(p)
     if type(p) == "string" then return p end
     if type(p) == "table" then
@@ -57,6 +68,29 @@ local function pkt_to_str(p)
     return tostring(p or "")
 end
 
+local function debug_log(prefix, obj)
+    -- prints type and truncated content for diagnosis
+    local t = type(obj)
+    local sample = ""
+    if t == "table" then
+        -- try common indices
+        if obj[1] and type(obj[1]) == "string" then sample = truncate_str(obj[1], 200)
+        else
+            local s = ""
+            local i = 0
+            for k, v in pairs(obj) do
+                i = i + 1
+                s = s .. tostring(k) .. "=" .. truncate_str(v, 60) .. ";"
+                if i >= 6 then break end
+            end
+            sample = s
+        end
+    else
+        sample = truncate_str(obj, 200)
+    end
+    LogToConsole("`c[DEBUG] "..prefix.." | type="..t.." | sample="..sample)
+end
+
 local function ovlay_safe(str)
     local dlg = {}
     dlg[0] = "OnTextOverlay"
@@ -64,12 +98,11 @@ local function ovlay_safe(str)
     SendVariantSafe(dlg)
 end
 
--- alias
 ovlay = ovlay_safe
 tol = function(txt) LogToConsole("`o[`#VanzCyaScript#001`o] `6"..tostring(txt)) end
 
 -- =========================
--- Original script content (adapted)
+-- Script utama (asli, dengan debug)
 -- =========================
 
 Tax = 5
@@ -202,17 +235,22 @@ function ovlay(str)
     local dlg = {}; dlg[0] = "OnTextOverlay"; dlg[1] = str; SendVariantSafe(dlg)
 end
 
-function tol(txt) LogToConsole("`o[`#VanzCyaScript#001`o] `6"..tostring(txt)) end
-
 -- =========================
--- Hooks (dengan guard tipe)
+-- Hooks with debug guards
 -- =========================
 
 AddHook("OnSendPacket", "packet",
 function(packet)
-    if type(packet) ~= "string" and type(packet) ~= "table" then return false end
+    -- guard tipe
+    if type(packet) ~= "string" and type(packet) ~= "table" then
+        debug_log("OnSendPacket - ignored non-string/table packet", packet)
+        return false
+    end
+
+    debug_log("OnSendPacket received", packet)
     local pkt = pkt_to_str(packet)
 
+    -- now safe to call :find / :match
     if pkt:find("/test (.+)") then
         local yes = pkt:match("/test (.+)")
         local v = {}; v[0] = "OnTalkBubble"; v[1] = (GetLocal() and GetLocal().netid) or 0; v[2] = ""..tostring(yes)..""
@@ -344,10 +382,15 @@ function(packet)
     return false
 end)
 
--- OnVariant with guard
+-- OnVariant with guard and debug
 AddHook("OnVariant", "var",
 function(v)
-    if type(v) ~= "table" then return false end
+    if type(v) ~= "table" then
+        debug_log("OnVariant - ignored non-table", v)
+        return false
+    end
+    debug_log("OnVariant received", v)
+
     local v0 = tostring(v[0] or ""); local v1 = tostring(v[1] or ""); local v2 = tostring(v[2] or "")
 
     if v0 == "OnConsoleMessage" and v1:find("commands.") then
@@ -382,10 +425,11 @@ function(v)
     return false
 end)
 
--- OnSendPacketRaw with guard
+-- OnSendPacketRaw with guard and debug
 AddHook("OnSendPacketRaw", "rawr",
 function(a)
-    if type(a) ~= "table" then return false end
+    if type(a) ~= "table" then debug_log("OnSendPacketRaw - ignored non-table", a); return false end
+    debug_log("OnSendPacketRaw received", a)
 
     if a.type == 3 and a.value == 18 then
         if punchset == true then
@@ -450,7 +494,7 @@ end)
 ovlay("Script Has Ben Run"); Sleep(2000); ovlay("Type /help or /fitur to show feature")
 SendPacket(2,"action|input\n|text|Script Proxy Bothax By VanzCya")
 
--- Main loop
+-- Main loop (unchanged)
 while true do
     Sleep(500)
     if AutoBtk then
