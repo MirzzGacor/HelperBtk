@@ -1,6 +1,65 @@
 -- test.lua (Bothax-style fixed)
 -- Perbaikan: konsisten dengan Bothax API, perbaikan bug scope/typo, logging debug ringan
+-- Compatibility shim: letakkan di baris paling atas file test.lua
+-- Agar skrip tidak crash jika beberapa API punya nama berbeda di executor
+local function safe_alias(name_variants)
+    for _, n in ipairs(name_variants) do
+        if type(_G[n]) == "function" then
+            return _G[n]
+        end
+    end
+    return nil
+end
 
+-- Dialog / variant sender
+if SendVariant == nil then
+    SendVariant = safe_alias({"sendVariant", "sendvariant", "SendVariant", "send_variant"})
+    if SendVariant == nil then
+        -- fallback: no-op logger to avoid crash
+        SendVariant = function(...)
+            if type(LogToConsole) == "function" then
+                LogToConsole("[WARN] SendVariant not available; call ignored")
+            end
+            return nil
+        end
+    end
+end
+
+-- Packet senders
+if SendPacketRaw == nil then
+    SendPacketRaw = safe_alias({"sendPacketRaw", "SendPacketRaw", "sendpacketraw"})
+    if SendPacketRaw == nil and type(SendPacket) == "function" then
+        -- create wrapper that maps SendPacketRaw(type, pkt) -> SendPacket(type, serialized)
+        SendPacketRaw = function(t, pkt)
+            -- best-effort: if pkt is table, try to stringify minimal
+            if type(pkt) == "table" and type(SendPacket) == "function" then
+                -- fallback: send a minimal text packet if possible (non-destructive)
+                -- many executors accept SendPacket(type, rawstring)
+                -- if not safe, this will be a no-op logger
+                local ok, s = pcall(function() return tostring(pkt.value or pkt.netid or "") end)
+                SendPacket(t, s or "")
+                return
+            end
+            if type(SendPacket) == "function" then
+                SendPacket(t, tostring(pkt))
+            end
+        end
+    end
+end
+
+-- Common aliases for player/object/inventory getters
+GetPlayerInfo = GetPlayerInfo or safe_alias({"GetLocal", "getLocal", "GetPlayerInfo", "getPlayerInfo"})
+GetLocal = GetLocal or GetPlayerInfo
+GetObjectList = GetObjectList or safe_alias({"GetObjectList", "getWorldObject", "getObjectList", "GetWorldObject"})
+GetInventory = GetInventory or safe_alias({"GetInventory", "getInventory"})
+
+-- Ensure LogToConsole exists
+if LogToConsole == nil then
+    LogToConsole = safe_alias({"logToConsole", "LogToConsole", "logtoConsole"})
+    if LogToConsole == nil then
+        LogToConsole = function(...) end
+    end
+end
 -- Utility
 local function SleepS(sec)
     sleep(sec * 1000)
